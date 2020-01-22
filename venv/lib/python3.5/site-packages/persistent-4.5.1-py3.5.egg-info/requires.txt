@@ -1,0 +1,14 @@
+zope.interface
+
+[:platform_python_implementation == "CPython"]
+cffi
+
+[docs]
+Sphinx
+repoze.sphinx.autointerface
+
+[test]
+zope.testrunner
+manuel
+
+[testing]
