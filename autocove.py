@@ -19,7 +19,7 @@ ac_name = "autocove"
 # protects print() and global stats
 ac_sem = threading.Semaphore()
 
-ac_v = 1.2
+ac_v = 1.3
 ac_author = "dragan.stancevic@canonical.com"
 ac_description = "Parallel Distributed Coverity Scanning Automator"
 
@@ -124,16 +124,13 @@ def ac_check_config_vals():
 # pull some values from config
 def ac_populate_from_config_vals():
     global ac_hosts
-    # print(ac_cfg['workers']['user'])
-    # print(ac_cfg['workers']['hosts'])
-    host_list  = ac_cfg['workers']['hosts'].split(',')
+    global ac_workers_max
+    global ac_workers_per_host
+
+    host_list = ac_cfg['workers']['hosts'].split(',')
     for host in host_list:
         ac_hosts.append((ac_cfg['workers']['user'], host))
-    # print(host_list)
-    # ac_hosts = [
-    #     ("dragan-s", "ubuntu-18-04-coverity.local"),
-    #     # ("dragan-s", "ubuntu-18-04-coverity2.local")
-    # ]
+    ac_workers_max = len(ac_hosts) * ac_workers_per_host
 
 
 def ac_run_trello_get_my_boards():
@@ -154,12 +151,12 @@ def ac_run_trello_create_robotics_board_card(name, description):
     ac_trello_board_robotics_cards = "https://api.trello.com/1/cards"
     ac_trello_board_robotics_param = {
         "name": name,
-        "idList": ac_cfg['trello_variables']['list_next'],
+        "idList": ac_cfg['trello_variables']['default_list'],
         "desc": description,
         "pos": "top",
         "keepFromSource": "all",
         "idMembers": "{}".format(ac_cfg['trello_variables']['users']),
-        "idLabels": "{}".format(ac_cfg['trello_api']['labels']),
+        "idLabels": "{}".format(ac_cfg['trello_variables']['labels']),
         "key": ac_cfg['trello_api']['key'],
         "token": ac_cfg['trello_api']['token']
     }
@@ -559,13 +556,17 @@ def ac_dump_defects():
         print("{:5} - {}\r".format(d[Count], d[Defect]), flush=True)
 
 
-def ac_remote_run_and_logit(i, cmd, label, w, p, e):
+def ac_remote_run_and_logit(i, cmd, path, label, w, p, e):
     logpath = "{}/ros{}/{}-{}_{}.{}.txt".format(ac_logs_x, p[Ros], p[Proj], e.replace("/", "-"), ac_ts, label)
+    if path == "":
+        ssh = "ssh {}@{} 'bash -lc \"{}\"'".format(w[User], w[Host], cmd)
+    else:
+        ssh = "ssh {}@{} 'bash -lc \"cd {}; {}\"'".format(w[User], w[Host], path, cmd)
     ac_sem.acquire()
     print("#{} - running {} on {}@{}\r\n\tlog at: {}\r".format(i, label, w[User], w[Host], logpath), flush=True)
     ac_sem.release()
     log = open(logpath, 'w')
-    p = Popen(cmd, shell=True, universal_newlines=True, stdout=log, stderr=log)
+    p = Popen(ssh, shell=True, universal_newlines=True, stdout=log, stderr=log)
     p.wait()
     log.flush()
     log.close()
@@ -575,71 +576,58 @@ def ac_remote_run_and_logit(i, cmd, label, w, p, e):
 def ac_run_mkdirs(i, w, p, e):
     destination = "{}/ros{}/{}/{}/build/{}".format(ac_sources, p[Ros], p[Proj], e, ac_name)
     mk_tmp = "mkdir -p {}".format(destination)
-    ssh = "ssh {}@{} \"{}\"".format(w[User], w[Host], mk_tmp)
-    ac_remote_run_and_logit(i, ssh, "mkdir", w, p, e)
+    ac_remote_run_and_logit(i, mk_tmp, "", "mkdir", w, p, e)
 
 
 def ac_run_cmake(i, w, p, e):
     destination = "{}/ros{}/{}/{}/build".format(ac_sources, p[Ros], p[Proj], e)
-    env = "source /opt/ros/melodic/setup.bash"
-    cmake = "cd {}; {}; bash -l -c 'cmake ..'".format(destination, env)
-    ssh = "ssh -tt {}@{} \"{}\"".format(w[User], w[Host], cmake)
-    ac_remote_run_and_logit(i, ssh, "cmake", w, p, e)
+    cmake = "cmake .."
+    ac_remote_run_and_logit(i, cmake, destination, "cmake", w, p, e)
 
 
 def ac_run_make(i, w, p, e):
-    env = "source /opt/ros/melodic/setup.bash"
     destination = "{}/ros{}/{}/{}/build".format(ac_sources, p[Ros], p[Proj], e)
-    make = "cd {}; {}; bash -l -c 'cov-build --dir {} make'".format(destination, env, ac_name)
-    ssh = "ssh -tt {}@{} \"{}\"".format(w[User], w[Host], make)
-    ac_remote_run_and_logit(i, ssh, "make", w, p, e)
+    make = "cov-build --dir {} make".format(ac_name)
+    ac_remote_run_and_logit(i, make, destination, "make", w, p, e)
 
 
 def ac_run_capture_python(i, w, p, e):
-    env = "source /opt/ros/melodic/setup.bash"
     destination = "{}/ros{}/{}/{}/build".format(ac_sources, p[Ros], p[Proj], e)
-    getpy = "cd {}; {}; bash -l -c 'cov-build --dir {} --no-command --fs-capture-search ./'".format(destination, env, ac_name)
-    ssh = "ssh -tt {}@{} \"{}\"".format(w[User], w[Host], getpy)
-    ac_remote_run_and_logit(i, ssh, "python-capture", w, p, e)
+    getpy = "cov-build --dir {} --no-command --fs-capture-search ./".format(ac_name)
+    ac_remote_run_and_logit(i, getpy, destination, "python-capture", w, p, e)
 
 
 def ac_run_analyze(i, w, p, e):
-    env = "source /opt/ros/melodic/setup.bash"
     destination = "{}/ros{}/{}/{}/build".format(ac_sources, p[Ros], p[Proj], e)
-    analyze = "cd {}; {}; bash -l -c 'cov-analyze --dir {} --all --disable-parse-warnings --enable-constraint-fpp --max-mem 256 --jobs 2 --aggressiveness-level high --strip-path {}'".format(destination, env, ac_name, destination)
-    ssh = "ssh -tt {}@{} \"{}\"".format(w[User], w[Host], analyze)
-    log = ac_remote_run_and_logit(i, ssh, "cov-analyze", w, p, e)
+    analyze = "cov-analyze --dir {} --all --disable-parse-warnings --enable-constraint-fpp --max-mem 256 --jobs 2 --aggressiveness-level high --strip-path {}".format(ac_name, destination)
+    log = ac_remote_run_and_logit(i, analyze, destination, "cov-analyze", w, p, e)
     (attach, summary) = ac_tally_modules_and_defects(e, log)
     return (attach, summary)
 
 
 def ac_run_emacs(i, w, p, e):
-    env = "source /opt/ros/melodic/setup.bash"
     destination = "{}/ros{}/{}/{}/build".format(ac_sources, p[Ros], p[Proj], e)
-    emacs = "cd {}; {}; bash -l -c 'cov-format-errors --emacs-style --dir {}'".format(destination, env, ac_name)
-    ssh = "ssh -tt {}@{} \"{}\"".format(w[User], w[Host], emacs)
-    log_path = ac_remote_run_and_logit(i, ssh, "cov-format-errors", w, p, e)
+    emacs = "cov-format-errors --emacs-style --dir {}".format(ac_name)
+    log_path = ac_remote_run_and_logit(i, emacs, destination, "cov-format-errors", w, p, e)
     return log_path
 
 
 def ac_run_create_coverity_server_projects_and_streams(i, w, p, e):
-    env = "source /opt/ros/melodic/setup.bash"
     destination = "{}/ros{}/{}/{}/build".format(ac_sources, p[Ros], p[Proj], e)
     project = "ac-ros{}-{}".format(p[Ros], p[Proj])
     desc = "{}-created-by-{}".format(project, "AutoCove")
     stream = "ac-ros{}-{}-{}".format(p[Ros], p[Proj], e.replace("/", "-"))
+    srv = ac_cfg['coverity']['server_ip']
+    port = ac_cfg['coverity']['server_port']
 
-    create_proj = "cd {}; {}; bash -l -c 'cov-manage-im --host {} --port {} --auth-key-file {} --mode projects --add --set name:{} --set description:{}'".format(destination, env, ac_cfg['coverity']['server_ip'], ac_cfg['coverity']['server_port'], ac_key, project, desc)
-    ssh = "ssh -tt {}@{} \"{}\"".format(w[User], w[Host], create_proj)
-    ac_remote_run_and_logit(i, ssh, "cov-manage-im_create_proj", w, p, e)
+    create_proj = "cov-manage-im --host {} --port {} --auth-key-file {} --mode projects --add --set name:{} --set description:{}".format(srv, port, ac_key, project, desc)
+    ac_remote_run_and_logit(i, create_proj, destination, "cov-manage-im_create_proj", w, p, e)
 
-    create_stream = "cd {}; {}; bash -l -c 'cov-manage-im --host {} --port {} --auth-key-file {} --mode streams --add --set name:{} --set lang:mixed'".format(destination, env, ac_cfg['coverity']['server_ip'], ac_cfg['coverity']['server_port'], ac_key, stream)
-    ssh = "ssh -tt {}@{} \"{}\"".format(w[User], w[Host], create_stream)
-    ac_remote_run_and_logit(i, ssh, "cov-manage-im_create_stream", w, p, e)
+    create_stream = "cov-manage-im --host {} --port {} --auth-key-file {} --mode streams --add --set name:{} --set lang:mixed'".format(srv, port, ac_key, stream)
+    ac_remote_run_and_logit(i, create_stream, destination, "cov-manage-im_create_stream", w, p, e)
 
-    associate_stream = "cd {}; {}; bash -l -c 'cov-manage-im --host {} --port {} --auth-key-file {} --mode projects --update --name {} --insert stream:{}'".format(destination, env, ac_cfg['coverity']['server_ip'], ac_cfg['coverity']['server_port'], ac_key, project, stream)
-    ssh = "ssh -tt {}@{} \"{}\"".format(w[User], w[Host], associate_stream)
-    ac_remote_run_and_logit(i, ssh, "cov-manage-im_associate_stream", w, p, e)
+    associate_stream = "cov-manage-im --host {} --port {} --auth-key-file {} --mode projects --update --name {} --insert stream:{}".format(srv, port, ac_key, project, stream)
+    ac_remote_run_and_logit(i, associate_stream, destination, "cov-manage-im_associate_stream", w, p, e)
 
 
 def ac_run_create_trello_card(i, w, p, e):
@@ -653,13 +641,12 @@ def ac_run_create_trello_card(i, w, p, e):
 
 
 def ac_run_upload_to_coverity_server(i, w, p, e):
-    env = "source /opt/ros/melodic/setup.bash"
     destination = "{}/ros{}/{}/{}/build".format(ac_sources, p[Ros], p[Proj], e)
-
     stream = "ac-ros{}-{}-{}".format(p[Ros], p[Proj], e.replace("/", "-"))
-    upload = "cd {}; {}; bash -l -c 'cov-commit-defects --host {} --port {} --auth-key-file {}  --dir {} --stream {}'".format(destination, env, ac_cfg['coverity']['server_ip'], ac_cfg['coverity']['server_port'], ac_key, ac_name, stream)
-    ssh = "ssh -tt {}@{} \"{}\"".format(w[User], w[Host], upload)
-    ac_remote_run_and_logit(i, ssh, "cov-commit-defects", w, p, e)
+    srv = ac_cfg['coverity']['server_ip']
+    port = ac_cfg['coverity']['server_port']
+    upload = "cov-commit-defects --host {} --port {} --auth-key-file {}  --dir {} --stream {}".format(srv, port, ac_key, ac_name, stream)
+    ac_remote_run_and_logit(i, upload, destination, "cov-commit-defects", w, p, e)
 
 
 def ac_worker_thread(i, w, p, e):
@@ -667,7 +654,6 @@ def ac_worker_thread(i, w, p, e):
     print("start - worker #{} - {}@{}\r".format(i, w[User], w[Host]), flush=True)
     ac_sem.release()
     card_id = ac_run_create_trello_card(i, w, p, e)
-
     ac_run_mkdirs(i, w, p, e)
     ac_run_cmake(i, w, p, e)
     ac_run_make(i, w, p, e)
