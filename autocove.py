@@ -19,9 +19,9 @@ ac_name = "autocove"
 # protects print() and global stats
 ac_sem = threading.Semaphore()
 
-ac_v = 1.3
+ac_v = 1.4
 ac_author = "dragan.stancevic@canonical.com"
-ac_description = "Parallel Distributed Coverity Scanning Automator"
+ac_description = "Parallel Distributed Coverity Scanning Automaton"
 
 ac_home_dir = "~/autocove"
 ac_home_dir_x = os.path.expanduser(ac_home_dir)
@@ -37,17 +37,17 @@ ac_ts = time.strftime("%Y-%m-%d_%H:%M:%S", time.gmtime())
 
 # stack of ROS projects we support
 # "directories to test" list is filled automatically, leave empty
-#   ("ros version", "project", "git location", ["ignore", "list", "of", "directories"], ["directories", "to", "test"])
+#   ("ros version", "project", "git location", ["directories", "to", "test"])
 ac_projects = [
-    ("1", "ros_comm", "https://github.com/ros/ros_comm.git", ["test", "ros_comm"], [])
-    # ("1", "rosconsole", "https://github.com/ros/rosconsole.git", ["test", "ros_comm"], [])
+    ("1", "roscpp_core", "https://github.com/ros/roscpp_core.git", [])
+    # ("1", "ros_comm", "https://github.com/ros/ros_comm.git", []),
+    # ("1", "rosconsole", "https://github.com/ros/rosconsole.git", [])
 ]
 # defines to make it easier to reference fields in the ac_projects tuples
 Ros = 0
 Proj = 1
 Git = 2
-Ignore = 3
-Dirs = 4
+Dirs = 3
 
 ac_hosts = []
 # defines to make it easier to reference fields in the ac_workers tuples
@@ -163,7 +163,7 @@ def ac_run_trello_create_robotics_board_card(name, description):
     ret = requests.request("POST", ac_trello_board_robotics_cards, params=ac_trello_board_robotics_param)
     val = json.loads(ret.text)
 
-    print("{} - {}\r".format(val['id'], val['name']))
+    print("card {} - {}\r".format(val['id'], val['name']))
     ac_trello_cards_created.append((val['id'], val['name']))
     return val['id']
 
@@ -374,15 +374,15 @@ def ac_return():
 
 # check if we have the git tree of the project
 def ac_check_for_project_git(p):
-    git_path = "{}/ros{}/{}/.git/config".format(ac_sources_x, p[0], p[1])
+    git_path = "{}/ros{}/{}/.git/config".format(ac_sources_x, p[Ros], p[Proj])
     return os.path.isfile(git_path)
 
 
 # clone git sources for the project locally
 def ac_fetch_project_git(p):
-    fetch_path = "{}/ros{}".format(ac_sources_x, p[0])
+    fetch_path = "{}/ros{}".format(ac_sources_x, p[Ros])
     os.chdir(fetch_path)
-    os.system("git clone " + p[2])
+    os.system("git clone " + p[Git])
     os.chdir(ac_home_dir_x)
 
 
@@ -419,42 +419,30 @@ def ac_distribute_source_to_host(p, h):
     os.system(rsync)
 
 
-def ac_is_dir_on_ignore_list(p, directory):
-    if directory[0] == ".":
-        return True
-    for i in p[Ignore]:
-        if directory == i:
-            return True
-    return False
-
-
 def ac_enumerate_project_subdirs(projects):
     for p in projects:
         git_path = "{}/ros{}/{}".format(ac_sources_x, p[Ros], p[Proj])
-        entries = os.listdir(git_path)
-        for e in entries:
-            path = git_path + "/" + e
-            if os.path.isdir(path) is False or ac_is_dir_on_ignore_list(p, e) is True:
-                continue
-            ac_sem.acquire()
-            print("scanning {}\r".format(e), flush=True)
-            ac_sem.release()
-            ac_enumerate_project_modules(p, e, path)
+        ac_find_package_files(p, "package.xml", git_path)
 
 
-def ac_enumerate_project_modules(p, e, path):
-    modules = os.listdir(path)
-    for m in modules:
-        if m[0] == ".":
-            continue
-        module = "{}/{}".format(e, m)
-        ac_sem.acquire()
-        print("\tfound: {}\r".format(m), flush=True)
-        ac_sem.release()
-        p[Dirs].append(module)
+def ac_find_package_files(p, name, location):
     ac_sem.acquire()
-    print("\r", flush=True)
+    print("scanning {}\r".format(p[Proj]), flush=True)
     ac_sem.release()
+    for root, dirs, files in os.walk(location):
+        for fname in files:
+            if fname != name:
+                continue
+            if location == root:
+                m = "."
+                package = location.split("/")[-1]
+            else:
+                m = root.replace("{}/".format(location), "")
+                package = m
+            p[Dirs].append(m)
+            ac_sem.acquire()
+            print("\tfound package: {}\r".format(package), flush=True)
+            ac_sem.release()
 
 
 def ac_tally_modules_and_defects(mod, log):
@@ -556,8 +544,20 @@ def ac_dump_defects():
         print("{:5} - {}\r".format(d[Count], d[Defect]), flush=True)
 
 
+def ac_amalgamate_project_and_modules_name(p, e):
+    name = p[Proj]
+    if e == ".":
+        return name
+    names = e.split('/')
+    for n in names:
+        tmp = "{}-{}".format(name, n)
+        name = tmp
+    return name
+
+
 def ac_remote_run_and_logit(i, cmd, path, label, w, p, e):
-    logpath = "{}/ros{}/{}-{}_{}.{}.txt".format(ac_logs_x, p[Ros], p[Proj], e.replace("/", "-"), ac_ts, label)
+    full_name = ac_amalgamate_project_and_modules_name(p, e)
+    logpath = "{}/ros{}/{}_{}.{}.txt".format(ac_logs_x, p[Ros], full_name, ac_ts, label)
     if path == "":
         ssh = "ssh {}@{} 'bash -lc \"{}\"'".format(w[User], w[Host], cmd)
     else:
@@ -616,7 +616,8 @@ def ac_run_create_coverity_server_projects_and_streams(i, w, p, e):
     destination = "{}/ros{}/{}/{}/build".format(ac_sources, p[Ros], p[Proj], e)
     project = "ac-ros{}-{}".format(p[Ros], p[Proj])
     desc = "{}-created-by-{}".format(project, "AutoCove")
-    stream = "ac-ros{}-{}-{}".format(p[Ros], p[Proj], e.replace("/", "-"))
+    full_name = ac_amalgamate_project_and_modules_name(p, e)
+    stream = "ac-ros{}-{}".format(p[Ros], full_name)
     srv = ac_cfg['coverity']['server_ip']
     port = ac_cfg['coverity']['server_port']
 
@@ -631,7 +632,8 @@ def ac_run_create_coverity_server_projects_and_streams(i, w, p, e):
 
 
 def ac_run_create_trello_card(i, w, p, e):
-    name = "ac-ros{}-{}-{}_{}".format(p[Ros], p[Proj], e.replace("/", "-"), ac_ts)
+    full_name = ac_amalgamate_project_and_modules_name(p, e)
+    name = "ac-ros{}-{}_{}".format(p[Ros], full_name, ac_ts)
     description = "{}\nstarting scan on {}".format(ac_dump_about(False), name)
     ac_sem.acquire()
     print("#{} - creating trello card {} on {}\r".format(i, name, "https://trello.com"), flush=True)
@@ -642,7 +644,8 @@ def ac_run_create_trello_card(i, w, p, e):
 
 def ac_run_upload_to_coverity_server(i, w, p, e):
     destination = "{}/ros{}/{}/{}/build".format(ac_sources, p[Ros], p[Proj], e)
-    stream = "ac-ros{}-{}-{}".format(p[Ros], p[Proj], e.replace("/", "-"))
+    full_name = ac_amalgamate_project_and_modules_name(p, e)
+    stream = "ac-ros{}-{}".format(p[Ros], full_name)
     srv = ac_cfg['coverity']['server_ip']
     port = ac_cfg['coverity']['server_port']
     upload = "cov-commit-defects --host {} --port {} --auth-key-file {}  --dir {} --stream {}".format(srv, port, ac_key, ac_name, stream)
