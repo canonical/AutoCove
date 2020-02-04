@@ -19,7 +19,7 @@ ac_name = "autocove"
 # protects print() and global stats
 ac_sem = threading.Semaphore()
 
-ac_v = 1.4
+ac_v = 1.5
 ac_author = "dragan.stancevic@canonical.com"
 ac_description = "Parallel Distributed Coverity Scanning Automaton"
 
@@ -162,8 +162,6 @@ def ac_run_trello_create_robotics_board_card(name, description):
     }
     ret = requests.request("POST", ac_trello_board_robotics_cards, params=ac_trello_board_robotics_param)
     val = json.loads(ret.text)
-
-    print("card {} - {}\r".format(val['id'], val['name']))
     ac_trello_cards_created.append((val['id'], val['name']))
     return val['id']
 
@@ -624,7 +622,7 @@ def ac_run_create_coverity_server_projects_and_streams(i, w, p, e):
     create_proj = "cov-manage-im --host {} --port {} --auth-key-file {} --mode projects --add --set name:{} --set description:{}".format(srv, port, ac_key, project, desc)
     ac_remote_run_and_logit(i, create_proj, destination, "cov-manage-im_create_proj", w, p, e)
 
-    create_stream = "cov-manage-im --host {} --port {} --auth-key-file {} --mode streams --add --set name:{} --set lang:mixed'".format(srv, port, ac_key, stream)
+    create_stream = "cov-manage-im --host {} --port {} --auth-key-file {} --mode streams --add --set name:{} --set lang:mixed".format(srv, port, ac_key, stream)
     ac_remote_run_and_logit(i, create_stream, destination, "cov-manage-im_create_stream", w, p, e)
 
     associate_stream = "cov-manage-im --host {} --port {} --auth-key-file {} --mode projects --update --name {} --insert stream:{}".format(srv, port, ac_key, project, stream)
