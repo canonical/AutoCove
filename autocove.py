@@ -19,7 +19,7 @@ ac_name = "autocove"
 # protects print() and global stats
 ac_sem = threading.Semaphore()
 
-ac_v = 1.5
+ac_v = 1.6
 ac_author = "dragan.stancevic@canonical.com"
 ac_description = "Parallel Distributed Coverity Scanning Automaton"
 
@@ -42,6 +42,14 @@ ac_projects = [
     ("1", "roscpp_core", "https://github.com/ros/roscpp_core.git", [])
     # ("1", "ros_comm", "https://github.com/ros/ros_comm.git", []),
     # ("1", "rosconsole", "https://github.com/ros/rosconsole.git", [])
+    # ("1", "rosconsole_bridge", "https://github.com/ros/rosconsole_bridge.git", [])
+    # ("1", "roslint", "https://github.com/ros/roslint.git", []),
+    # ("1", "rospack", "https://github.com/ros/rospack.git", [])
+    # ("1", "std_msgs", "https://github.com/ros/std_msgs.git", [])
+    # ("1", "urdf", "https://github.com/ros/urdf.git", [])
+    # ("1", "resource_retriever", "https://github.com/ros/resource_retriever.git", [])
+    # ("1", "pluginlib", "https://github.com/ros/pluginlib.git", [])
+    # ("1", "nodelet_core", "https://github.com/ros/nodelet_core.git", [])
 ]
 # defines to make it easier to reference fields in the ac_projects tuples
 Ros = 0
@@ -173,7 +181,8 @@ def ac_run_trello_get_robotics_cards_list(trello_id):
         "key": ac_cfg['trello_api']['key'],
         "token": ac_cfg['trello_api']['token']
     }
-    requests.request("GET", ac_trello_board_robotics_cards_list, params=ac_trello_board_robotics_param)
+    ret = requests.request("GET", ac_trello_board_robotics_cards_list, params=ac_trello_board_robotics_param)
+    return json.loads(ret.text)
 
 
 def ac_run_trello_delete_robotics_board_card(trello_id):
@@ -474,6 +483,7 @@ def ac_extract_log_values(path):
                 ac_total_files += int(m.group(1))
                 ac_sem.release()
                 summary += "{}\n".format(l)
+                continue
 
             m = re.match("^Functions analyzed\ +: (\d+)$", l)
             if m:
@@ -481,6 +491,7 @@ def ac_extract_log_values(path):
                 ac_total_functions += int(m.group(1))
                 ac_sem.release()
                 summary += "{}\n".format(l)
+                continue
 
             # coverity prints different totals, so we capture them all
             m = re.match("^Defect occurrences found\ +: (\d+) Total$", l)
@@ -491,6 +502,8 @@ def ac_extract_log_values(path):
                 summary += "{}\n".format(l)
                 if int(m.group(1)) > 0:
                     attach = True
+                continue
+
             # coverity prints different totals, so we capture them all
             m = re.match("^Defect occurrences found\ +: (\d+)$", l)
             if m:
@@ -500,6 +513,8 @@ def ac_extract_log_values(path):
                 summary += "{}\n".format(l)
                 if int(m.group(1)) > 0:
                     attach = True
+                continue
+
             # coverity prints different totals, so we capture them all
             m = re.match("^Defect occurrences found\ +: (\d+) (\w+)$", l)
             if m:
@@ -510,6 +525,7 @@ def ac_extract_log_values(path):
                 ac_add_log_value(m.group(2), int(m.group(1)))
                 if int(m.group(1)) > 0:
                     attach = True
+                continue
 
             m = re.match("^(\d+) (\w+)$", l)
             if m:
@@ -517,6 +533,7 @@ def ac_extract_log_values(path):
                 ac_add_log_value(m.group(2), int(m.group(1)))
                 ac_sem.release()
                 summary += "{}\n".format(l)
+                continue
 
         log.close()
         return (attach, summary)
